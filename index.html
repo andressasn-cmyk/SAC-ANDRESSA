@@ -714,16 +714,44 @@ function parseLine(line){
 }
 
 /* ═══════════════════════════════════════
-   LOAD CSV
+   LOAD CSV — com fallback de proxies CORS
 ═══════════════════════════════════════ */
+async function fetchWithProxies(url){
+  /* Lista de estratégias em ordem de tentativa */
+  const strategies = [
+    /* 1) Direto — funciona quando o arquivo é aberto localmente ou servidor permissivo */
+    () => fetch(url + "&t=" + Date.now()),
+    /* 2) allorigins.win — retorna JSON com campo "contents" */
+    async () => {
+      const r = await fetch(`https://api.allorigins.win/get?url=${encodeURIComponent(url)}&t=${Date.now()}`);
+      if(!r.ok) throw new Error("allorigins " + r.status);
+      const j = await r.json();
+      /* allorigins devolve um Response-like; precisamos converter */
+      return { ok:true, text: async () => j.contents };
+    },
+    /* 3) corsproxy.io */
+    () => fetch(`https://corsproxy.io/?${encodeURIComponent(url)}`),
+    /* 4) thingproxy */
+    () => fetch(`https://thingproxy.freeboard.io/fetch/${url}`),
+  ];
+
+  for(const strategy of strategies){
+    try{
+      const resp = await strategy();
+      if(!resp.ok) continue;
+      const text = await resp.text();
+      if(text && text.length > 10) return text;
+    } catch(_){}
+  }
+  throw new Error("Todos os proxies falharam");
+}
+
 async function loadCSV(){
   try{
     setStatus("Carregando dados…", "loading");
-    const resp = await fetch(CSV_URL + "&t=" + Date.now());
-    if(!resp.ok) throw new Error("HTTP " + resp.status);
-    const text = await resp.text();
+    const text = await fetchWithProxies(CSV_URL);
     allData = parseCSV(text);
-    if(allData.length === 0) throw new Error("Planilha vazia");
+    if(allData.length === 0) throw new Error("Planilha vazia ou sem dados");
 
     buildCategoryTabs();
     buildFilters();
@@ -732,7 +760,7 @@ async function loadCSV(){
     setStatus(`${allData.length} registros carregados`, "success");
   } catch(err){
     console.error(err);
-    setStatus("Erro ao carregar dados. Tentando novamente…", "error");
+    setStatus("Erro ao carregar. Verifique a conexão ou a planilha.", "error");
   }
 }
 
